@@ -1,0 +1,484 @@
+---
+// Dashboard simplificado con JavaScript vanilla
+---
+
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Dashboard</title>
+  </head>
+  <body style="font-family: sans-serif; padding: 20px; background: #f5f5f5;">
+    <div id="loading" style="text-align: center; padding: 50px;">
+      <p>Cargando...</p>
+    </div>
+    
+    <div id="dashboard" style="display: none; max-width: 1200px; margin: 0 auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+          <h1 id="user-name" style="margin: 0;"></h1>
+          <p style="margin: 5px 0; color: #666;"><strong>Rol:</strong> <span id="user-role"></span></p>
+        </div>
+        <button id="logout-btn" style="padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">
+          Cerrar sesión
+        </button>
+      </div>
+
+      <hr style="border: none; border-top: 2px solid #e0e0e0; margin: 20px 0;" />
+
+      <!-- Panel para BUSINESS -->
+      <div id="business-panel" style="display: none;">
+        <h2>Panel de Negocio</h2>
+        <p style="color: #666; margin-bottom: 30px;">Gestiona tus servicios desde aquí</p>
+        
+        <!-- Formulario para crear servicio -->
+        <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px;">
+          <h3 style="margin-top: 0;">Crear Nuevo Servicio</h3>
+          
+          <div id="service-message" style="display: none; padding: 10px; border-radius: 4px; margin-bottom: 15px;"></div>
+          
+          <form id="create-service-form">
+            <div style="margin-bottom: 15px;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">Nombre del servicio</label>
+              <input type="text" id="service-name" placeholder="Ej: Corte de cabello" required 
+                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">Duración (minutos)</label>
+              <input type="number" id="service-duration" placeholder="Ej: 30" min="1" required 
+                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+              <label style="display: block; margin-bottom: 5px; font-weight: bold;">Precio (€)</label>
+              <input type="number" step="0.01" id="service-price" placeholder="Ej: 25.00" min="0" required 
+                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            
+            <button type="submit" id="create-btn" 
+              style="width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; font-weight: bold; cursor: pointer;">
+              Crear Servicio
+            </button>
+          </form>
+        </div>
+        
+        <!-- Lista de servicios del negocio -->
+        <div id="business-services-container"></div>
+      </div>
+
+      <!-- Panel para USERS -->
+      <div id="user-panel" style="display: none;">
+        <h2>Explora Negocios</h2>
+        <p style="color: #666; margin-bottom: 20px;">Selecciona un negocio para ver sus servicios</p>
+        
+        <div id="businesses-list" style="margin-bottom: 30px; display: flex; gap: 10px; flex-wrap: wrap;"></div>
+        
+        <div id="services-section" style="display: none;">
+          <h3>Servicios Disponibles</h3>
+          <div id="user-services-container" style="display: grid; gap: 15px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // @ts-nocheck
+      import { supabase } from '../lib/supabase';
+
+      let currentUser = null;
+      let currentRole = 'user';
+      let businesses = [];
+      let selectedBusinessId = '';
+
+      console.log('Dashboard cargando...');
+
+      // Verificar sesión
+      async function checkSession() {
+        console.log('Verificando sesión...');
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        console.log('Sesión:', session);
+        console.log('Error:', error);
+        
+        if (!session) {
+          console.log('No hay sesión, redirigiendo a login...');
+          window.location.href = '/login';
+          return;
+        }
+
+        currentUser = session.user;
+        
+        // IMPORTANTE: Obtener el rol desde la tabla users, NO del user_metadata
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('role, full_name')
+          .eq('id', currentUser.id)
+          .single();
+
+        console.log('Datos del usuario desde la tabla:', userData);
+        console.log('Error al obtener usuario:', userError);
+
+        // Si existe en la tabla users, usar ese rol
+        if (userData) {
+          currentRole = userData.role || 'customer';
+        } else {
+          // Si no existe en la tabla, usar el del metadata (fallback)
+          currentRole = currentUser.user_metadata?.role || 'customer';
+        }
+        
+        // Normalizar: customer y user son lo mismo
+        if (currentRole === 'customer') {
+          currentRole = 'customer';
+        }
+        
+        console.log('Usuario:', currentUser);
+        console.log('Rol final:', currentRole);
+
+        // Mostrar información del usuario
+        const userName = document.getElementById('user-name');
+        const userRole = document.getElementById('user-role');
+        const loading = document.getElementById('loading');
+        const dashboard = document.getElementById('dashboard');
+        const businessPanel = document.getElementById('business-panel');
+        const userPanel = document.getElementById('user-panel');
+
+        // Usar el nombre de la tabla users si existe, sino del metadata
+        const displayName = userData?.full_name || currentUser.user_metadata?.full_name || currentUser.email;
+        if (userName) userName.textContent = `Hola ${displayName}`;
+        if (userRole) userRole.textContent = currentRole;
+
+        // Mostrar el dashboard
+        if (loading) loading.style.display = 'none';
+        if (dashboard) dashboard.style.display = 'block';
+
+        // Configurar logout después de mostrar el dashboard
+        setupLogout();
+
+        if (currentRole === 'business') {
+          console.log('Cargando panel de negocio...');
+          if (businessPanel) businessPanel.style.display = 'block';
+          setupBusinessPanel();
+          await loadBusinessServices();
+        } else if (currentRole === 'customer' || currentRole === 'user') {
+          console.log('Cargando panel de cliente...');
+          if (userPanel) userPanel.style.display = 'block';
+          await loadUserPanel();
+        } else {
+          console.error('Rol desconocido:', currentRole);
+        }
+      }
+
+      // Panel para Business - Configurar formulario
+      function setupBusinessPanel() {
+        const form = document.getElementById('create-service-form');
+        if (form) {
+          form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await createService();
+          });
+        }
+      }
+
+      // Crear servicio
+      async function createService() {
+        const name = document.getElementById('service-name').value;
+        const duration = document.getElementById('service-duration').value;
+        const price = document.getElementById('service-price').value;
+        const createBtn = document.getElementById('create-btn');
+        const messageDiv = document.getElementById('service-message');
+
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creando...';
+
+        try {
+          const { data, error } = await supabase
+            .from('services')
+            .insert([{
+              business_id: currentUser.id,
+              name: name,
+              duration_minutes: parseInt(duration),
+              price: parseFloat(price)
+            }])
+            .select();
+
+          if (error) throw error;
+
+          // Mostrar mensaje de éxito
+          messageDiv.style.display = 'block';
+          messageDiv.style.background = '#d4edda';
+          messageDiv.style.color = '#155724';
+          messageDiv.textContent = '¡Servicio creado exitosamente!';
+
+          // Limpiar formulario
+          document.getElementById('service-name').value = '';
+          document.getElementById('service-duration').value = '';
+          document.getElementById('service-price').value = '';
+
+          // Recargar servicios
+          await loadBusinessServices();
+
+          setTimeout(() => {
+            messageDiv.style.display = 'none';
+          }, 3000);
+        } catch (error) {
+          messageDiv.style.display = 'block';
+          messageDiv.style.background = '#f8d7da';
+          messageDiv.style.color = '#721c24';
+          messageDiv.textContent = 'Error: ' + error.message;
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = 'Crear Servicio';
+        }
+      }
+
+      // Cargar servicios del negocio
+      async function loadBusinessServices() {
+        const container = document.getElementById('business-services-container');
+        if (!container) return;
+
+        const { data: services, error } = await supabase
+          .from('services')
+          .select('*')
+          .eq('business_id', currentUser.id)
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          container.innerHTML = '<p style="color: red;">Error al cargar servicios</p>';
+          return;
+        }
+
+        if (!services || services.length === 0) {
+          container.innerHTML = '<div style="padding: 20px; background: #f8f9fa; border-radius: 8px; text-align: center;"><p>No has creado servicios todavía</p></div>';
+          return;
+        }
+
+        container.innerHTML = `
+          <h3>Servicios Creados</h3>
+          <div style="display: grid; gap: 15px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+            ${services.map(service => `
+              <div style="padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #e0e0e0;">
+                <h4 style="margin: 0 0 10px 0; color: #333;">${service.name}</h4>
+                <div style="color: #666; margin-bottom: 10px;">
+                  <p style="margin: 5px 0;"><strong>⏱️ Duración:</strong> ${service.duration_minutes} minutos</p>
+                  <p style="margin: 5px 0;"><strong>💰 Precio:</strong> ${service.price}€</p>
+                </div>
+                <button onclick="deleteService('${service.id}')" 
+                  style="padding: 8px 16px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">
+                  Eliminar
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      // Eliminar servicio
+      window.deleteService = async function(serviceId) {
+        if (!confirm('¿Estás seguro de eliminar este servicio?')) return;
+
+        const { error } = await supabase
+          .from('services')
+          .delete()
+          .eq('id', serviceId);
+
+        if (!error) {
+          await loadBusinessServices();
+        } else {
+          alert('Error al eliminar el servicio');
+        }
+      }
+
+      // Panel para Users
+      async function loadUserPanel() {
+        console.log('Cargando lista de negocios...');
+        console.log('Usuario actual ID:', currentUser.id);
+        
+        // Primero, ver TODOS los usuarios para debuggear
+        const { data: allUsers, error: allError } = await supabase
+          .from('users')
+          .select('*');
+        
+        console.log('TODOS los usuarios en la tabla users:', allUsers);
+        console.log('Total de usuarios:', allUsers?.length);
+        console.log('Error al obtener todos los usuarios:', allError);
+        
+        if (allError) {
+          console.error('DETALLE DEL ERROR:', {
+            message: allError.message,
+            details: allError.details,
+            hint: allError.hint,
+            code: allError.code
+          });
+        }
+        
+        // Ahora buscar solo los business
+        const { data, error } = await supabase
+          .from('users')
+          .select('id, full_name, role')
+          .eq('role', 'business');
+
+        console.log('Query ejecutada: SELECT id, full_name, role FROM users WHERE role = "business"');
+        console.log('Negocios encontrados (role=business):', data);
+        console.log('Cantidad de negocios:', data?.length);
+        console.log('Error al buscar negocios:', error);
+        
+        if (error) {
+          console.error('DETALLE DEL ERROR:', {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code
+          });
+        }
+
+        businesses = data || [];
+        
+        if (businesses.length === 0) {
+          console.warn('⚠️ No se encontraron negocios con rol "business"');
+          console.warn('Posibles causas:');
+          console.warn('1. No hay usuarios con role="business" en la tabla');
+          console.warn('2. RLS (Row Level Security) está bloqueando el acceso');
+          console.warn('3. El rol está escrito diferente (mayúsculas/minúsculas)');
+        }
+        
+        // Obtener el negocio seleccionado de la URL
+        const urlParams = new URLSearchParams(window.location.search);
+        selectedBusinessId = urlParams.get('business') || (businesses[0]?.id || '');
+
+        console.log('Negocio seleccionado:', selectedBusinessId);
+
+        renderBusinesses();
+        
+        if (selectedBusinessId) {
+          await loadUserServices(selectedBusinessId);
+        }
+      }
+
+      // Renderizar lista de negocios
+      function renderBusinesses() {
+        console.log('Renderizando negocios:', businesses);
+        const container = document.getElementById('businesses-list');
+        
+        if (!container) {
+          console.error('No se encontró el contenedor businesses-list');
+          return;
+        }
+        
+        if (businesses.length === 0) {
+          container.innerHTML = '<p style="padding: 20px; background: white; border-radius: 8px; text-align: center;">No hay negocios disponibles todavía</p>';
+          console.log('No hay negocios para mostrar');
+          return;
+        }
+
+        console.log(`Mostrando ${businesses.length} negocios`);
+        
+        container.innerHTML = businesses.map((business) => {
+          const isSelected = selectedBusinessId === business.id;
+          return `
+            <a 
+              href="/dashboard?business=${business.id}"
+              style="
+                padding: 15px 25px;
+                border: 2px solid ${isSelected ? '#007bff' : '#ddd'};
+                background: ${isSelected ? '#007bff' : 'white'};
+                color: ${isSelected ? 'white' : '#333'};
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: ${isSelected ? 'bold' : 'normal'};
+                transition: all 0.3s ease;
+                display: inline-block;
+              "
+            >
+              ${business.full_name || 'Negocio sin nombre'}
+            </a>
+          `;
+        }).join('');
+        
+        console.log('Negocios renderizados correctamente');
+      }
+
+      // Cargar servicios del negocio seleccionado para users
+      async function loadUserServices(businessId) {
+        const servicesSection = document.getElementById('services-section');
+        const userServicesContainer = document.getElementById('user-services-container');
+
+        if (!servicesSection || !userServicesContainer) return;
+
+        servicesSection.style.display = 'block';
+
+        const { data: services, error } = await supabase
+          .from('services')
+          .select('*')
+          .eq('business_id', businessId)
+          .order('created_at', { ascending: false });
+
+        if (error) {
+          userServicesContainer.innerHTML = '<p style="color: red;">Error al cargar servicios</p>';
+          return;
+        }
+
+        if (!services || services.length === 0) {
+          userServicesContainer.innerHTML = '<div style="padding: 20px; background: #f8f9fa; border-radius: 8px; text-align: center;"><p>Este negocio no tiene servicios disponibles</p></div>';
+          return;
+        }
+
+        userServicesContainer.innerHTML = services.map(service => `
+          <div style="padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border: 1px solid #e0e0e0;">
+            <h4 style="margin: 0 0 10px 0; color: #333;">${service.name}</h4>
+            <div style="color: #666; margin-bottom: 10px;">
+              <p style="margin: 5px 0;"><strong>⏱️ Duración:</strong> ${service.duration_minutes} minutos</p>
+              <p style="margin: 5px 0;"><strong>💰 Precio:</strong> ${service.price}€</p>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      // Variable para evitar múltiples configuraciones
+      let logoutConfigured = false;
+
+      // Configurar botón de cerrar sesión
+      function setupLogout() {
+        if (logoutConfigured) {
+          console.log('Logout ya configurado, saltando...');
+          return;
+        }
+
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+          logoutBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            console.log('Cerrando sesión...');
+            
+            try {
+              const { error } = await supabase.auth.signOut();
+              if (error) {
+                console.error('Error al cerrar sesión:', error);
+              }
+              console.log('Sesión cerrada, redirigiendo...');
+              window.location.href = '/login';
+            } catch (err) {
+              console.error('Error:', err);
+              // Forzar redirección de todas formas
+              window.location.href = '/login';
+            }
+          });
+          logoutConfigured = true;
+          console.log('Botón de logout configurado');
+        } else {
+          console.error('No se encontró el botón de logout');
+        }
+      }
+
+      // Inicializar
+      async function init() {
+        await checkSession();
+      }
+
+      // Esperar a que el DOM esté completamente cargado
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+      } else {
+        init();
+      }
+    </script>
+  </body>
+</html>
